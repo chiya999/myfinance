@@ -1,0 +1,29 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      // 使用 CodeLLDB 调试 Rust 程序
+      "type": "lldb",
+      "request": "launch",
+      "name": "Debug Rust (LLDB)",
+      "cargo": {
+        "args": ["build", "--bin=rust_course"]
+      },
+      "program": "${workspaceFolder}/target/debug/rust_course.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "sourceLanguages": ["rust"],
+      "preLaunchTask": "cargo build"
+    },
+    {
+      // 使用 MSVC 调试器
+      "type": "cppvsdbg",
+      "request": "launch",
+      "name": "Debug Rust (MSVC)",
+      "program": "${workspaceFolder}/target/debug/rust_course.exe",
+      "args": [],
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "cargo build"
+    }
+  ]
+}

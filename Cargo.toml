@@ -1,0 +1,55 @@
+[package]
+name = "rust_course"
+version = "0.1.0"
+edition = "2024"
+description = "Rust 课程学习项目"
+
+[dependencies]
+# 持久化 — SQLite
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# 序列化 / 反序列化
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# 错误处理
+anyhow = "1"
+thiserror = "2"
+
+# 日志
+log = "0.4"
+env_logger = "0.11"
+
+# CLI 参数解析
+clap = { version = "4", features = ["derive"] }
+
+# 随机数
+rand = "0.8"
+
+# 时间日期
+chrono = { version = "0.4", features = ["serde"] }
+
+# 异步运行时
+tokio = { version = "1", features = ["full"] }
+
+# TUI 框架
+ratatui = "0.29"
+crossterm = "0.28"
+
+# 数据导入
+csv = "1.3"
+
+# 配置与目录
+toml = "0.8"
+dirs = "5"
+
+# HTTP 客户端 (按课程需要取消注释)
+# reqwest = { version = "0.12", features = ["json"] }
+
+[profile.dev]
+# 开发模式下启用少量优化，加快编译速度
+opt-level = 1
+
+[profile.release]
+# 发布模式启用 LTO 以获得更小的二进制体积
+lto = true

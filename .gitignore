@@ -1,0 +1,18 @@
+# Rust 编译产物
+/target/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+Thumbs.db
+.DS_Store
+
+# 数据库文件（运行时生成）
+*.db
+
+# 环境变量文件
+.env
+.env.local
