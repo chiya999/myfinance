@@ -8,9 +8,9 @@ use std::io;
 
 use crossterm::{
     execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::{backend::CrosstermBackend, Terminal};
 
 use crate::db::Database;
 use crate::error::AppResult;
@@ -30,7 +30,7 @@ pub fn run_tui(db: Database) -> AppResult<()> {
 
     // 创建 App 状态和事件处理器
     let mut app = App::new(db);
-    let mut event_handler = EventHandler::new(std::time::Duration::from_millis(200));
+    let event_handler = EventHandler::new(std::time::Duration::from_millis(200));
 
     // 主事件循环
     loop {
@@ -56,6 +56,6 @@ pub fn run_tui(db: Database) -> AppResult<()> {
     execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
     terminal.show_cursor()?;
 
-    println!("👋 再见！");
+    println!("再见!");
     Ok(())
 }

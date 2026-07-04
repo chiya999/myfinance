@@ -52,13 +52,11 @@ pub fn handle(cmd: TxnCommand, db: &Database) -> AppResult<()> {
             let from_date = filters
                 .from_date
                 .as_deref()
-                .map(|s| NaiveDate::from_str(s).ok())
-                .flatten();
+                .and_then(|s| NaiveDate::from_str(s).ok());
             let to_date = filters
                 .to_date
                 .as_deref()
-                .map(|s| NaiveDate::from_str(s).ok())
-                .flatten();
+                .and_then(|s| NaiveDate::from_str(s).ok());
             let min_amount = filters.min_amount.map(|y| (y * 100.0) as i64);
             let max_amount = filters.max_amount.map(|y| (y * 100.0) as i64);
 

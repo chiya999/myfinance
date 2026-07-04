@@ -79,8 +79,19 @@ fn commit_import(
     let mut skipped = 0;
 
     for txn in &result.transactions {
-        // 尝试自动匹配分类 — 简化为使用分类 ID 1（工资）作为收入，5（餐饮）作为默认支出
-        let category_id = if txn.txn_type == "income" { 1 } else { 5 };
+        // 交易对方即分类 —— 每个对方自动成为一个独立分类
+        let raw = txn.counterparty.as_deref().unwrap_or("未知");
+        // 截断过长的交易对方名（如 "霸舌生滚牛肉米粉（学府首座店）" → "霸舌生滚牛肉米粉.."）
+        let counterparty: String = if raw.chars().count() > 14 {
+            raw.chars().take(13).collect::<String>() + ".."
+        } else {
+            raw.to_string()
+        };
+        let category_id = get_or_create_category(
+            db,
+            &counterparty,
+            if txn.txn_type == "income" { "income" } else { "expense" },
+        )?;
 
         match txn_svc.create(
             account_id,
@@ -108,4 +119,24 @@ fn commit_import(
     }
 
     Ok(())
+}
+
+/// 查找或创建「交易对方」分类，返回其 category_id
+fn get_or_create_category(db: &crate::db::Database, name: &str, kind: &str) -> crate::error::AppResult<i64> {
+    let conn = db.conn();
+    // 尝试查找已存在的同名分类
+    let existing: Option<i64> = conn.query_row(
+        "SELECT id FROM categories WHERE name=?1 AND kind=?2",
+        rusqlite::params![name, kind],
+        |row| row.get(0),
+    ).ok();
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    // 创建新分类
+    conn.execute(
+        "INSERT INTO categories (name, kind, icon, sort_order, is_default) VALUES (?1, ?2, '', 999, 0)",
+        rusqlite::params![name, kind],
+    )?;
+    Ok(conn.last_insert_rowid())
 }

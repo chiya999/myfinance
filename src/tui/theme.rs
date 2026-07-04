@@ -9,6 +9,7 @@ pub struct Theme {
     pub warning: Color,
     pub text: Color,
     pub muted: Color,
+    #[allow(dead_code)]
     pub bg: Color,
     pub surface: Color,
     pub border: Color,

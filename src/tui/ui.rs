@@ -42,13 +42,23 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         Tab::Reports => draw_reports_tab(f, chunks[2], app, &theme),
     }
 
+    // 帮助覆盖层
+    if app.mode == InputMode::Help {
+        draw_help_overlay(f, area, &theme);
+    }
+
+    // 删除确认覆盖层
+    if app.mode == InputMode::DeleteConfirm {
+        draw_delete_confirm(f, area, &theme, app.status_message.as_deref().unwrap_or(""));
+    }
+
     // 状态栏
     draw_status_bar(f, chunks[3], app, &theme);
 }
 
 fn draw_title(f: &mut Frame, area: Rect, theme: &Theme) {
-    let title = Paragraph::new("💰 myfinance")
-        .style(Style::default().fg(theme.primary))
+    let title = Paragraph::new("myfinance")
+        .style(Style::default().fg(theme.primary).bold())
         .alignment(Alignment::Left);
     f.render_widget(title, area);
 }
@@ -78,10 +88,17 @@ fn draw_tabs(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .select(app.tab as usize)
         .style(Style::default().fg(theme.text));
 
-    // 右侧快捷键提示
-    let hint = Paragraph::new("1-5:切换 Tab q:退出 a:添加 r:刷新 ?:帮助")
-        .style(Style::default().fg(theme.muted))
-        .alignment(Alignment::Right);
+    // 右侧：时间范围 + 账户标识 + 快捷键
+    let acc_label = app.active_account_name.as_deref().unwrap_or("全部账户");
+    let acc_color = if app.active_account_filter.is_some() { theme.warning } else { theme.muted };
+    let tr_label = app.date_filter.label();
+    let hint = Paragraph::new(format!(
+        "[{}] [{}] t换范围 f选账户 ?帮助 q退出",
+        tr_label,
+        acc_label,
+    ))
+    .style(Style::default().fg(acc_color))
+    .alignment(Alignment::Right);
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -166,7 +183,7 @@ fn draw_dashboard(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         "📋 最近交易",
         Style::default().fg(theme.primary).bold(),
     ))];
-    for (i, txn) in app.recent_txns_summary.iter().enumerate().take(8) {
+    for (i, txn) in app.recent_txns_summary.iter().enumerate().take(15) {
         let style = if i == app.selected_index {
             Style::default().fg(Color::White).bg(theme.highlight)
         } else {
@@ -222,49 +239,41 @@ fn draw_accounts_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn draw_transactions_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
-    let txn_svc = crate::engine::TxnService::new(&app.db);
-    let txns = txn_svc
-        .list(None, None, None, None, None, None, None, 20)
-        .unwrap_or_default();
+    let vis = super::app::visible_rows();
+    let start = app.visible_offset;
+    let end = (start + vis).min(app.txn_lines.len());
 
     let mut lines: Vec<Line> = vec![Line::from(Span::styled(
         format!(
-            "{:<6} {:<12} {:<8} {:<8} {:<12} {}",
-            "ID", "日期", "类型", "分类", "金额", "描述"
+            "📝 交易记录 ({}/{}) ← j/k滚动  账户: {}  范围: {}",
+            app.txn_total,
+            app.txn_lines.len(),
+            app.active_account_name.as_deref().unwrap_or("全部"),
+            app.date_filter.label(),
         ),
         Style::default().fg(theme.primary).bold(),
     ))];
-    lines.push(Line::from("─".repeat(70)));
 
-    for (i, t) in txns.iter().enumerate() {
-        let style = if i == app.selected_index {
-            Style::default().fg(Color::White).bg(theme.highlight)
-        } else {
-            Style::default().fg(theme.text)
-        };
-        let sign = match t.txn_type {
-            crate::models::TxnType::Income => "+",
-            crate::models::TxnType::Expense => "-",
-            crate::models::TxnType::Transfer => "↔",
-        };
-        lines.push(Line::from(Span::styled(
-            format!(
-                "{:<6} {:<12} {:<8} {:<8} {}{:<11} {}",
-                t.id.unwrap(),
-                t.txn_date,
-                t.txn_type.display_name(),
-                t.category_id.map_or("-".to_string(), |c| c.to_string()),
-                sign,
-                cents_to_yuan(t.amount_cents),
-                t.description,
-            ),
-            style,
-        )));
+    if app.txn_lines.is_empty() {
+        lines.push(Line::from(Span::styled("  (暂无交易)", Style::default().fg(theme.muted))));
+    } else {
+        let header = format!("{:<6} {:<12} {:<8} {:<8} {:<12} {}", "ID", "日期", "类型", "分类", "金额", "描述");
+        lines.push(Line::from(Span::styled(header, Style::default().fg(theme.muted))));
+        lines.push(Line::from("─".repeat(72)));
+
+        for i in start..end {
+            let line = &app.txn_lines[i];
+            let style = if i == app.selected_index {
+                Style::default().fg(Color::White).bg(theme.highlight)
+            } else {
+                Style::default().fg(theme.text)
+            };
+            lines.push(Line::from(Span::styled(line.as_str(), style)));
+        }
     }
 
     let p = Paragraph::new(Text::from(lines)).block(
         Block::default()
-            .title("📝 交易记录")
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme.border)),
     );
@@ -272,61 +281,100 @@ fn draw_transactions_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
 }
 
 fn draw_budget_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
+    let from = app.date_filter.start_date();
+    let today = chrono::Local::now().date_naive();
+
+    // 按时间范围计算总支出
+    let total_spent: i64 = if let Some(d) = from {
+        app.db.conn().query_row(
+            "SELECT COALESCE(SUM(amount_cents),0) FROM transactions WHERE type='expense' AND txn_date>=?1",
+            rusqlite::params![d.to_string()],
+            |row| row.get(0),
+        ).unwrap_or(0)
+    } else {
+        app.db.conn().query_row(
+            "SELECT COALESCE(SUM(amount_cents),0) FROM transactions WHERE type='expense'",
+            [], |row| row.get(0),
+        ).unwrap_or(0)
+    };
+
     let svc = crate::engine::BudgetService::new(&app.db);
-    let statuses = svc.status().unwrap_or_default();
+    let statuses = svc.status(from).unwrap_or_default();
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Length(2), Constraint::Min(0)])
-        .split(area);
+    // 布局：标题 + 总额行 + 各商户
+    let count = statuses.len().min(20) + 2; // title + total
+    let mut constraints: Vec<Constraint> = vec![Constraint::Length(2)];
+    for _ in 0..count { constraints.push(Constraint::Length(1)); }
+    constraints.push(Constraint::Min(0));
+    let rows = Layout::default().direction(Direction::Vertical).constraints(constraints).split(area);
 
-    // 总览
-    let total_budget: i64 = statuses.iter().map(|s| s.amount_cents).sum();
-    let total_spent: i64 = statuses.iter().map(|s| s.spent_cents).sum();
-    let overview = Paragraph::new(format!(
-        "总预算: ¥{}  已花: ¥{}  剩余: ¥{}",
-        cents_to_yuan(total_budget),
-        cents_to_yuan(total_spent),
-        cents_to_yuan(total_budget - total_spent),
-    ))
-    .style(Style::default().fg(theme.text));
-    f.render_widget(overview, chunks[0]);
+    // 标题
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled("🎯 预算执行", Style::default().fg(theme.primary).bold()))),
+        rows[0],
+    );
 
-    // 详细进度条
-    let mut lines: Vec<Line> = Vec::new();
-    for s in &statuses {
-        let color = if s.progress_pct >= 100.0 {
-            theme.danger
-        } else if s.progress_pct >= 80.0 {
-            theme.warning
-        } else {
-            theme.success
-        };
-        let bar = progress_bar_unicode(s.progress_pct, 30, color);
-        lines.push(Line::from(vec![
-            Span::raw(format!("{}{:<8} ", s.category_icon, s.category_name)),
-            Span::styled(bar, Style::default().fg(color)),
-            Span::raw(format!(
-                " {:>5.1}% ¥{}/¥{}",
-                s.progress_pct,
-                cents_to_yuan(s.spent_cents),
-                cents_to_yuan(s.amount_cents)
-            )),
-        ]));
+    // 总额行
+    let total_pct = if app.total_budget_cents > 0 {
+        total_spent as f64 / app.total_budget_cents as f64 * 100.0
+    } else { 0.0 };
+    let total_color = if total_pct >= 100.0 { theme.danger } else if total_pct >= 80.0 { theme.warning } else { theme.success };
+    let total_splits = Layout::default().direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)]).split(rows[1]);
+    f.render_widget(
+        Paragraph::new(format!("总额预算: ¥{}", cents_to_yuan(app.total_budget_cents))).style(Style::default().fg(theme.warning)),
+        total_splits[0],
+    );
+    let bar = progress_bar_unicode(total_pct, 30, total_color);
+    f.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(bar, Style::default().fg(total_color)),
+            Span::raw(format!(" {:>5.1}% ¥{}/¥{}", total_pct, cents_to_yuan(total_spent), cents_to_yuan(app.total_budget_cents))),
+        ])),
+        total_splits[1],
+    );
+
+    // 各商户预算
+    if statuses.is_empty() {
+        f.render_widget(
+            Paragraph::new("  暂无预算。按 a 添加: 商户名,金额  如: 美团,3000").style(Style::default().fg(theme.muted)),
+            rows[2],
+        );
+        return;
     }
 
-    let p = Paragraph::new(Text::from(lines)).block(
-        Block::default()
-            .title("🎯 预算执行")
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme.border)),
-    );
-    f.render_widget(p, chunks[1]);
+    for (i, s) in statuses.iter().enumerate().take(20) {
+        let row_idx = i + 2;
+        if row_idx >= rows.len() { break; }
+        let splits = Layout::default().direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(35), Constraint::Percentage(65)]).split(rows[row_idx]);
+
+        let color = if s.progress_pct >= 100.0 { theme.danger }
+                    else if s.progress_pct >= 80.0 { theme.warning }
+                    else { theme.success };
+        let name = if s.category_name.chars().count() > 14 {
+            format!("{}..", s.category_name.chars().take(13).collect::<String>())
+        } else { s.category_name.clone() };
+
+        f.render_widget(
+            Paragraph::new(format!("{}: ¥{}", name, cents_to_yuan(s.amount_cents))).style(Style::default().fg(theme.text)),
+            splits[0],
+        );
+        let bar = progress_bar_unicode(s.progress_pct, 30, color);
+        f.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled(bar, Style::default().fg(color)),
+                Span::raw(format!(" {:>5.1}% ¥{}/¥{}", s.progress_pct, cents_to_yuan(s.spent_cents), cents_to_yuan(s.amount_cents))),
+            ])),
+            splits[1],
+        );
+    }
 }
 
 fn draw_reports_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     let today = chrono::Local::now().date_naive();
-    let month_start = chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap();
+    let from = app.date_filter.start_date().unwrap_or(
+        chrono::NaiveDate::from_ymd_opt(2000, 1, 1).unwrap());
     let rpt_svc = crate::engine::ReportService::new(&app.db);
 
     let chunks = Layout::default()
@@ -335,10 +383,12 @@ fn draw_reports_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
         .split(area);
 
     // 摘要
-    if let Ok(summary) = rpt_svc.summary(month_start, today) {
+    if let Ok(summary) = rpt_svc.summary(from, today) {
+        let range_label = app.date_filter.label();
         let text = format!(
-            "📊 本月 ({}) 收支总览\n  收入: ¥{}  支出: ¥{}  净额: ¥{}  交易: {}笔",
-            today.format("%Y-%m"),
+            "{} 收支总览 ({}→今)\n  收入: ¥{}  支出: ¥{}  净额: ¥{}  交易: {}笔",
+            if app.active_account_filter.is_some() { "📊" } else { "📊" },
+            range_label,
             cents_to_yuan(summary.total_income),
             cents_to_yuan(summary.total_expense),
             cents_to_yuan(summary.net),
@@ -355,28 +405,145 @@ fn draw_reports_tab(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     }
 
     // 分类明细
-    if let Ok(breakdown) =
-        rpt_svc.category_breakdown(crate::models::CategoryKind::Expense, month_start, today)
-    {
-        let mut lines: Vec<Line> = vec![Line::from(Span::styled(
-            "📋 支出分类",
-            Style::default().fg(theme.primary).bold(),
-        ))];
-        for b in breakdown.iter().take(10) {
-            let bar = progress_bar_unicode(b.percentage, 20, theme.danger);
-            lines.push(Line::from(vec![
-                Span::raw(format!("{} {:<10} ", b.category_icon, b.category_name)),
-                Span::styled(bar, Style::default().fg(theme.danger)),
-                Span::raw(format!(
-                    " {:.1}% ¥{}",
-                    b.percentage,
-                    cents_to_yuan(b.amount_cents)
-                )),
-            ]));
+    let expense_total: i64 = app.db.conn().query_row(
+        "SELECT COALESCE(SUM(amount_cents),0) FROM transactions WHERE type='expense'",
+        [], |row| row.get(0)).unwrap_or(0);
+
+    match rpt_svc.category_breakdown(crate::models::CategoryKind::Expense, from, today) {
+        Ok(breakdown) if !breakdown.is_empty() => {
+            // 用 Layout 强制对齐：左列=名字，右列=进度条+数字
+            let mut rows: Vec<ratatui::layout::Rect> = Vec::new();
+            let mut constraints: Vec<Constraint> = vec![Constraint::Length(2)]; // 标题行
+            for _ in breakdown.iter().take(10) {
+                constraints.push(Constraint::Length(1));
+            }
+            let row_chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(constraints)
+                .split(chunks[1]);
+
+            // 标题
+            let title = Paragraph::new(Line::from(Span::styled(
+                format!("📋 支出分类 (合计: ¥{})", cents_to_yuan(expense_total)),
+                Style::default().fg(theme.primary).bold(),
+            )));
+            f.render_widget(title, row_chunks[0]);
+
+            for (i, b) in breakdown.iter().take(10).enumerate() {
+                let splits = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+                    .split(row_chunks[i + 1]);
+
+                let name = &b.category_name;
+                let short: String = if name.chars().count() > 16 {
+                    name.chars().take(15).collect::<String>() + ".."
+                } else {
+                    name.to_string()
+                };
+                let label = Paragraph::new(short).style(Style::default().fg(theme.text));
+                f.render_widget(label, splits[0]);
+
+                let bar = progress_bar_unicode(b.percentage, 30, theme.danger);
+                let right = Paragraph::new(Line::from(vec![
+                    Span::styled(bar, Style::default().fg(theme.danger)),
+                    Span::raw(format!(" {:>5.1}% ¥{}", b.percentage, cents_to_yuan(b.amount_cents))),
+                ]));
+                f.render_widget(right, splits[1]);
+            }
+
         }
-        let p = Paragraph::new(Text::from(lines));
-        f.render_widget(p, chunks[1]);
+        Ok(_) => {
+            let p = Paragraph::new(format!(
+                "📋 支出分类\n  数据库中支出合计 ¥{}，但分类聚合并未返回结果。\n  请确认导入的交易category_id是否为有效支出分类(1-11)。",
+                cents_to_yuan(expense_total)
+            )).style(Style::default().fg(theme.warning));
+            f.render_widget(p, chunks[1]);
+        }
+        Err(e) => {
+            let p = Paragraph::new(format!("📋 支出分类\n  查询错误: {e}"))
+                .style(Style::default().fg(theme.danger));
+            f.render_widget(p, chunks[1]);
+        }
     }
+}
+
+/// 帮助覆盖层
+fn draw_help_overlay(f: &mut Frame, area: Rect, theme: &Theme) {
+    let popup_area = centered_rect(60, 70, area);
+    f.render_widget(
+        ratatui::widgets::Clear,
+        popup_area,
+    );
+    let lines = vec![
+        Line::from(Span::styled(" 快捷键帮助", Style::default().fg(theme.primary).bold())),
+        Line::from(""),
+        Line::from(" 1-5     切换标签页"),
+        Line::from(" Tab     下一标签"),
+        Line::from(" j/k/↑/↓  上下导航"),
+        Line::from(" a       添加 (账户/交易/预算)"),
+        Line::from(" Enter   查看详情 / 确认"),
+        Line::from(" d       删除当前选中项"),
+        Line::from(" f       切换账户筛选"),
+        Line::from(" r       刷新数据"),
+        Line::from(" h/?     显示此帮助"),
+        Line::from(" q       退出程序"),
+        Line::from(" Esc     取消 / 退出"),
+        Line::from(""),
+        Line::from(Span::styled(" 按任意键关闭", Style::default().fg(theme.muted))),
+    ];
+    let p = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .title(" ? 帮助 ")
+                .border_style(Style::default().fg(theme.primary))
+                .style(Style::default().bg(Color::Rgb(10, 12, 18))),
+        )
+        .style(Style::default().fg(theme.text));
+    f.render_widget(p, popup_area);
+}
+
+/// 删除确认覆盖层
+fn draw_delete_confirm(f: &mut Frame, area: Rect, theme: &Theme, msg: &str) {
+    let popup_area = centered_rect(40, 15, area);
+    f.render_widget(ratatui::widgets::Clear, popup_area);
+    let lines = vec![
+        Line::from(Span::styled(msg, Style::default().fg(theme.warning).bold())),
+    ];
+    let p = Paragraph::new(Text::from(lines))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .title(" 确认删除 ")
+                .border_style(Style::default().fg(theme.danger))
+                .style(Style::default().bg(Color::Rgb(10, 12, 18))),
+        )
+        .style(Style::default().fg(theme.text));
+    f.render_widget(p, popup_area);
+}
+
+/// 居中矩形
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn draw_status_bar(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
@@ -411,7 +578,7 @@ fn draw_status_bar(f: &mut Frame, area: Rect, app: &App, theme: &Theme) {
     );
 }
 
-fn progress_bar_unicode(pct: f64, width: usize, color: Color) -> String {
+fn progress_bar_unicode(pct: f64, width: usize, _color: Color) -> String {
     let filled = ((pct / 100.0 * width as f64).round() as usize).min(width);
     let empty = width.saturating_sub(filled);
     format!("{}{}", "█".repeat(filled), "░".repeat(empty))

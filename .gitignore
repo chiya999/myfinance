@@ -3,6 +3,7 @@
 
 # IDE
 .idea/
+.vscode/
 *.swp
 *.swo
 
@@ -12,7 +13,25 @@ Thumbs.db
 
 # 数据库文件（运行时生成）
 *.db
+*.db-shm
+*.db-wal
 
 # 环境变量文件
 .env
 .env.local
+
+# 真实账单数据（隐私，不入库）
+*.csv
+!test_data/*.csv
+
+# 报告与答辩材料（非项目源码，不入库）
+报告/
+答辩PPT.html
+答辩PPT.pdf
+
+# 工具临时目录
+.frontend-slides/
+
+# 备份文件
+*.bak
+*.bak2

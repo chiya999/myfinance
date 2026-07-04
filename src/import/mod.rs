@@ -39,13 +39,14 @@ pub trait BillImportAdapter {
 /// 自动检测文件格式并导入
 pub fn import_file(path: &Path) -> AppResult<ImportResult> {
     let content = std::fs::read_to_string(path)?;
-    let first_line = content.lines().next().unwrap_or("");
+    // 取前20行用于格式检测
+    let preview: String = content.lines().take(20).collect::<Vec<_>>().join("\n");
 
     let adapters: Vec<Box<dyn BillImportAdapter>> =
         vec![Box::new(AlipayAdapter), Box::new(WechatAdapter)];
 
     for adapter in &adapters {
-        if adapter.detect(first_line) {
+        if adapter.detect(&preview) {
             return adapter.parse(&content);
         }
     }

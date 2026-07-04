@@ -1,20 +1,25 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use clap::Subcommand;
 use std::str::FromStr;
 
-use crate::db::Database;
+use std::path::PathBuf;
+
+use crate::db::{Database, Repository, TransactionRepository};
 use crate::engine::{ReportService, TrendGranularity};
 use crate::error::AppResult;
+use crate::export::{self, ExportData};
 use crate::models::{CategoryKind, cents_to_yuan};
 
 #[derive(Subcommand)]
 pub enum ReportCommand {
     /// 月度收支总览
     Summary {
-        #[arg(long, default_value = "2025-01-01")]
-        from: String,
-        #[arg(long, default_value = "2025-12-31")]
-        to: String,
+        /// 起始日期 (YYYY-MM-DD)，默认当年1月1日
+        #[arg(long)]
+        from: Option<String>,
+        /// 结束日期 (YYYY-MM-DD)，默认今天
+        #[arg(long)]
+        to: Option<String>,
     },
     /// 按分类统计
     Category {
@@ -36,6 +41,15 @@ pub enum ReportCommand {
     },
     /// 账户快照
     AccountSnapshot,
+    /// 导出数据为 CSV 或 JSON
+    Export {
+        /// 导出格式: csv 或 json
+        #[arg(short, long, default_value = "csv")]
+        format: String,
+        /// 输出文件路径
+        #[arg(short, long, default_value = "myfinance_export.csv")]
+        output: PathBuf,
+    },
 }
 
 pub fn handle(cmd: ReportCommand, db: &Database) -> AppResult<()> {
@@ -43,8 +57,10 @@ pub fn handle(cmd: ReportCommand, db: &Database) -> AppResult<()> {
 
     match cmd {
         ReportCommand::Summary { from, to } => {
-            let from = parse_date(&from)?;
-            let to = parse_date(&to)?;
+            let today = chrono::Local::now().date_naive();
+            let year_start = chrono::NaiveDate::from_ymd_opt(today.year(), 1, 1).unwrap();
+            let from = from.as_deref().map(parse_date).transpose()?.unwrap_or(year_start);
+            let to = to.as_deref().map(parse_date).transpose()?.unwrap_or(today);
             let r = svc.summary(from, to)?;
 
             println!("📊 收支总览: {} ~ {}\n", r.period_start, r.period_end);
@@ -65,16 +81,10 @@ pub fn handle(cmd: ReportCommand, db: &Database) -> AppResult<()> {
                 "income" | "收入" => CategoryKind::Income,
                 _ => CategoryKind::Expense,
             };
-            let from = from
-                .as_deref()
-                .map(parse_date)
-                .transpose()?
-                .unwrap_or_else(|| NaiveDate::from_ymd_opt(2025, 1, 1).unwrap());
-            let to = to
-                .as_deref()
-                .map(parse_date)
-                .transpose()?
-                .unwrap_or_else(|| NaiveDate::from_ymd_opt(2025, 12, 31).unwrap());
+            let today = chrono::Local::now().date_naive();
+            let year_start = NaiveDate::from_ymd_opt(today.year(), 1, 1).unwrap();
+            let from = from.as_deref().map(parse_date).transpose()?.unwrap_or(year_start);
+            let to = to.as_deref().map(parse_date).transpose()?.unwrap_or(today);
 
             let breakdown = svc.category_breakdown(cat_kind, from, to)?;
             println!(
@@ -121,6 +131,16 @@ pub fn handle(cmd: ReportCommand, db: &Database) -> AppResult<()> {
                     "█".repeat(bar_len),
                 );
             }
+        }
+        ReportCommand::Export { format, output } => {
+            let txns = TransactionRepository::new(db.conn()).find_filtered(
+                None, None, None, None, None, None, None, 10000,
+            )?;
+            let accounts = crate::db::AccountRepository::new(db.conn()).find_all()?;
+            let categories = crate::db::CategoryRepository::new(db.conn()).find_all()?;
+            let budgets = crate::db::BudgetRepository::new(db.conn()).find_all()?;
+            let data = ExportData::new(accounts, txns, categories, budgets);
+            export::export_to_file(&output, &format, &data)?;
         }
         ReportCommand::AccountSnapshot => {
             let snapshots = svc.account_snapshot()?;

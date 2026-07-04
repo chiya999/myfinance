@@ -61,11 +61,11 @@ pub fn handle(cmd: BudgetCommand, db: &Database) -> AppResult<()> {
             amount,
             period,
         } => {
-            let id = svc.set(category_id, amount, &period)?;
+            let id = svc.set(category_id, amount, &period, None)?;
             println!("✅ 预算设置成功: ID={id}");
         }
         BudgetCommand::Status => {
-            let statuses = svc.status()?;
+            let statuses = svc.status(None)?;
             println!("📊 预算执行状态\n");
             if statuses.is_empty() {
                 println!("  (暂无有效预算)");

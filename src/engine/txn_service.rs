@@ -196,6 +196,7 @@ impl<'a> TxnService<'a> {
     }
 
     /// 列出交易
+    #[allow(clippy::too_many_arguments)]
     pub fn list(
         &self,
         account_id: Option<i64>,

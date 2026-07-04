@@ -23,9 +23,9 @@ impl BillImportAdapter for AlipayAdapter {
         let counterparty_col = CsvParser::find_column(&headers, &["交易对方"]);
 
         let mut transactions = Vec::new();
-        let mut warnings = Vec::new();
+        let warnings = Vec::new();
 
-        for (i, row) in rows.iter().enumerate() {
+        for row in rows.iter() {
             let date_str = CsvParser::get_column(row, date_col).unwrap_or("");
             let type_str = CsvParser::get_column(row, type_col).unwrap_or("");
             let amount_str = CsvParser::get_column(row, amount_col).unwrap_or("0");
@@ -52,7 +52,7 @@ impl BillImportAdapter for AlipayAdapter {
                 txn_date: date,
                 amount_cents,
                 txn_type: txn_type.to_string(),
-                description: format!("{desc}"),
+                description: desc.to_string(),
                 counterparty: CsvParser::get_column(row, counterparty_col).map(|s| s.to_string()),
                 raw_category_hint: None,
             });

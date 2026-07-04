@@ -16,6 +16,7 @@ impl<'a> TransactionRepository<'a> {
     }
 
     /// 按条件筛选交易列表
+    #[allow(clippy::too_many_arguments)]
     pub fn find_filtered(
         &self,
         account_id: Option<i64>,

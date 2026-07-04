@@ -1,4 +1,4 @@
-use chrono::{Datelike, Months, NaiveDate};
+use chrono::{Datelike, NaiveDate};
 use serde::Serialize;
 
 use crate::db::{AccountRepository, Database};
@@ -163,7 +163,7 @@ impl<'a> ReportService<'a> {
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map(rusqlite::params![from.to_string(), to.to_string()], |row| {
             let date_str: String = row.get(0)?;
-            let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or_else(|_| from);
+            let date = NaiveDate::parse_from_str(&date_str, "%Y-%m-%d").unwrap_or(from);
             Ok(TrendPoint {
                 date,
                 income_cents: row.get(1)?,
